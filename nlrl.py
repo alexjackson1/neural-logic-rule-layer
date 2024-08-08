@@ -73,10 +73,6 @@ class NeuralLogicRuleLayer(nn.Module):
         GS = torch.sigmoid(self.GS)
         return (1 - GS) * x_1 + GS * x_2
 
-    def forward_nnf(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:
-        x_neg = self.negation(x)
-        return self.conjunction(x_neg)
-
     def forward(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:
         x_neg = self.negation(x)
         x_and = self.conjunction(x_neg)
