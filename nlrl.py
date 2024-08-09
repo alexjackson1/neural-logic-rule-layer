@@ -1,4 +1,3 @@
-from typing import Literal
 from jaxtyping import Float
 from beartype import beartype
 

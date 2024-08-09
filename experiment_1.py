@@ -1,7 +1,9 @@
-from typing import Literal
 from beartype import beartype
 from beartype.typing import Tuple
 from jaxtyping import Float
+
+import os
+import argparse
 
 from tqdm import tqdm
 
@@ -9,83 +11,30 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
-import numpy as np
-from numpy import random
-
-from models import FullyConnectedNetwork
+from models import FullyConnectedNetwork, NeuralLogicNetwork
+from config import ALL_FNS
 
 
 @beartype
-def generate_samples(rng: random.Generator, n: int) -> Float[Tensor, "n 2"]:
+def generate_samples(rng: torch.Generator, n: int) -> Float[Tensor, "n 2"]:
     """Generate n pairs of samples."""
-    r = rng.random((n, 2))
-    return torch.tensor(r, dtype=torch.float32)
+    return torch.rand(n, 2, generator=rng)
 
 
 @beartype
 def augment_samples(
-    rng: random.Generator, samples: Float[Tensor, "n 2"], amplitude: float
+    rng: torch.Generator, samples: Float[Tensor, "n 2"], amplitude: float
 ) -> Float[Tensor, "n 2"]:
     """Add Gaussian noise to the samples."""
-    noise = rng.normal(0, amplitude, samples.shape)
+    noise = amplitude * torch.randn(samples.shape, generator=rng)
     return samples + noise
-
-
-@beartype
-def l_and(x: Float[Tensor, "..."], y: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic conjunction (x ∧ y)."""
-    return x * y
-
-
-@beartype
-def l_or(x: Float[Tensor, "..."], y: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic disjunction (x ∨ y)."""
-    return x + y - x * y
-
-
-@beartype
-def l_not(x: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic negation (≠g x)."""
-    return 1 - x
-
-
-@beartype
-def l_mi(x: Float[Tensor, "..."], y: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic material implication (x → y)."""
-    return l_or(l_not(x), y)
-
-
-@beartype
-def l_xor(x: Float[Tensor, "..."], y: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic exclusive or (x ⊕ y)."""
-    return l_and(l_or(x, y), l_not(l_and(x, y)))
-
-
-@beartype
-def l_eq(x: Float[Tensor, "..."], y: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-    """Algebraic equality (x ≣ y)."""
-    return l_not(l_xor(x, y))
-
-
-all_fns = [
-    ("x ∧ y", l_and),
-    ("x ∨ y", l_or),
-    ("≠g x", lambda x, _: l_not(x)),
-    ("≠g y", lambda _, y: l_not(y)),
-    ("x ⊕ y", l_xor),
-    ("(x + y)/2", lambda x, y: (x + y) / 2),
-    ("x·≠g y", lambda x, y: x * l_not(y)),
-    ("x", lambda x, _: x),
-    ("y", lambda _, y: y),
-    ("0.7", lambda x, _: torch.full(x.shape, 0.7)),
-]
 
 
 @beartype
 def compute_fns(samples: Float[Tensor, "n 2"]) -> Float[Tensor, "n 10"]:
     """Compute the results of all functions on the pair of samples."""
     results = []
-    for _, fn in all_fns:
+    for _, fn in ALL_FNS:
         results.append(fn(samples[:, 0], samples[:, 1]))
     return torch.stack(results, dim=1)
 
@@ -96,7 +45,8 @@ def make_dataset(samples: Tuple[int, int], noise: float, seed: int = 42) -> Tupl
     Tuple[Float[Tensor, "m 2"], Float[Tensor, "m 10"]],
 ]:
     """Generate a dataset of samples and their corresponding targets."""
-    rng = random.default_rng(seed)
+    rng = torch.Generator()
+    rng.manual_seed(seed)
 
     x_pre_train = generate_samples(rng, samples[0]).float()
     x_train = augment_samples(rng, x_pre_train, noise).float()
@@ -130,15 +80,6 @@ def evaluate(
 
 
 @beartype
-def init_model(
-    arch: Literal["AN", "AO", "FC"], layers: int, hidden_dim: int, dropout: float = 0.2
-) -> Module:
-    if arch == "FC":
-        return FullyConnectedNetwork(2, 1, layers, hidden_dim, dropout)
-    return NeuralLogicNetwork(2, 1, layers, hidden_dim, arch == "AN")
-
-
-@beartype
 def train_model(
     model: Module,
     data: Tuple[
@@ -159,7 +100,7 @@ def train_model(
     x_test, y_test = x_test, y_test
 
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.BCELoss()  # Assuming the use of MSE loss
+    criterion = torch.nn.BCELoss()
 
     train_losses, test_losses = [], []
     train_accuracies, test_accuracies = [], []
@@ -184,6 +125,7 @@ def train_model(
             # Compute forwards and backwards pass
             optimiser.zero_grad()
             output = model(x_batch)
+            output = torch.clamp(output, 0, 1)
             loss = criterion(output, y_batch)
             loss.backward()
             optimiser.step()
@@ -193,9 +135,7 @@ def train_model(
             epoch_acc += accuracy(y_batch, output).item()
 
             if (batch // batch_size) % test_every == 0:
-                test_loss, test_acc = evaluate(
-                    model, x_test, y_test[:, fn].unsqueeze(-1), criterion
-                )
+                test_loss, test_acc = evaluate(model, x_test, y_test, criterion)
                 test_losses.append(test_loss.item())
                 test_accuracies.append(test_acc.item())
                 pb.set_postfix(
@@ -219,48 +159,111 @@ def train_model(
             {
                 "train_loss": train_losses[-1],
                 "test_loss": test_losses[-1],
-                "train_acc": train_accuracies[-1],
-                "test_acc": test_accuracies[-1],
+                "train_acc": train_accuracies[-1] * 100,
+                "test_acc": test_accuracies[-1] * 100,
             }
         )
 
     return train_losses, test_losses, train_accuracies, test_accuracies
 
 
+class Arguments(argparse.Namespace):
+    id: str
+    arch: str
+    layers: int
+    hidden: int
+    epochs: int
+    batch_size: int
+    lr: float
+    lr_div: int
+    lr_step: int
+    test_interval: int
+    data_seed: int
+    train_seed: int
+    train_size: int
+    test_size: int
+    train_noise: float
+    function: int
+    dropout: float
+
+
 if __name__ == "__main__":
-    import itertools
-    from models import FullyConnectedNetwork, NeuralLogicNetwork
 
-    F = len(all_fns)  # number of functions
-    FN_NAMES = [fn[0] for fn in all_fns]  # function names
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--id", type=str, default="")
+    parser.add_argument("--arch", type=str, default="AO")
+    parser.add_argument("--layers", type=int, default=2)
+    parser.add_argument("--hidden", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=20)
+    parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument("--lr_div", type=int, default=10)
+    parser.add_argument("--lr_step", type=int, default=20)
+    parser.add_argument("--test_interval", type=int, default=500)
+    parser.add_argument("--data_seed", type=int, default=42)
+    parser.add_argument("--train_seed", type=int, default=10)
+    parser.add_argument("--train_size", type=int, default=10_000)
+    parser.add_argument("--test_size", type=int, default=1_000)
+    parser.add_argument("--train_noise", type=float, default=0.0025)
+    parser.add_argument("--function", type=int, default=0, choices=range(len(ALL_FNS)))
+    parser.add_argument("--dropout", type=float, default=0.2)
 
-    A = ["AN", "AO", "FC"]  # architectures
-    L = {"AN": [2, 3], "AO": [2, 3], "FC": [2, 3, 4]}  # number of layers
-    H = {"AN": [5, 25, 50], "AO": [5, 25, 50], "FC": [5, 25, 50, 100]}  # hidden units
-    D = 0.2  # dropout
+    args = parser.parse_args(namespace=Arguments())
 
-    N = 10  # number of runs
-    E = 100  # number of epochs
-    B = 20  # batch size
+    # Extract the function name
+    FN_NAMES = [fn[0] for fn in ALL_FNS]
+    fn_name = FN_NAMES[args.function]
+    desc = f"{args.arch}-{args.layers}-{args.hidden} ({fn_name})"
 
-    LR = {"AN": 0.1, "AO": 0.1, "FC": 0.001}  # learning rate
-    LR_DIV = 10  # divide learning rate by this
-    LR_STEP = 20  # this number of epochs
+    # Generate the dataset
+    d_train, d_test = make_dataset(
+        (args.train_size, args.test_size), args.train_noise, args.data_seed
+    )
 
-    TEST_EVERY = 500  # test every this number of batches
+    # Extract the data
+    train_data = d_train[0], d_train[1][:, args.function].unsqueeze(-1)
+    test_data = d_test[0], d_test[1][:, args.function].unsqueeze(-1)
 
-    d_train, d_test = make_dataset((10_000, 1_000), 0.0025)
+    # Create the model
+    if args.arch == "FC":
+        model = FullyConnectedNetwork(2, 1, args.layers, args.hidden, args.dropout)
+    else:
+        model = NeuralLogicNetwork(2, 1, args.layers, args.hidden, args.arch == "AN")
 
-    for arch in A:
-        for l, h, fn, i in itertools.product(L[arch], H[arch], range(F), range(N)):
-            fn_name = FN_NAMES[fn]
-            desc = f"{arch}-{l}-{h} ({fn_name}, {i+1}/{N})"
+    # Set the random seed
+    torch.manual_seed(args.train_seed)
 
-            train_data = d_train[0], d_train[1][:, fn].unsqueeze(-1)
-            test_data = d_test[0], d_test[1][:, fn].unsqueeze(-1)
+    # Train the model
+    data = train_data, test_data
+    train_losses, test_losses, train_accuracies, test_accuracies = train_model(
+        model,
+        data,
+        args.epochs,
+        args.batch_size,
+        args.lr,
+        args.lr_div,
+        args.lr_step,
+        args.test_interval,
+        desc,
+    )
 
-            model = init_model(arch, l, h, D)
-            data = train_data, test_data
-            train_losses, test_losses, train_accuracies, test_accuracies = train_model(
-                model, data, E, B, LR[arch], LR_DIV, LR_STEP, TEST_EVERY, desc
-            )
+    # Save the results
+    results = {
+        "fn_name": fn_name,
+        "train_losses": train_losses,
+        "test_losses": test_losses,
+        "train_accuracies": train_accuracies,
+        "test_accuracies": test_accuracies,
+    }
+
+    results_dir = f"results/{args.arch}-{args.layers}-{args.hidden}"
+    os.makedirs(results_dir, exist_ok=True)
+
+    results_file = f"{results_dir}/{args.function}-{args.data_seed}-{args.train_seed}"
+    if args.id:
+        results_file += f"-{args.id}"
+    results_file += ".pt"
+
+    torch.save(results, results_file)
+
+    print(f"Results saved to {results_file}")
