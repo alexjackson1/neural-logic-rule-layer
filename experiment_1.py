@@ -6,6 +6,7 @@ import os
 import argparse
 
 from tqdm import tqdm
+import pandas as pd
 
 import torch
 from torch import Tensor
@@ -13,49 +14,6 @@ from torch.nn import Module
 
 from models import FullyConnectedNetwork, NeuralLogicNetwork
 from config import ALL_FNS
-
-
-@beartype
-def generate_samples(rng: torch.Generator, n: int) -> Float[Tensor, "n 2"]:
-    """Generate n pairs of samples."""
-    return torch.rand(n, 2, generator=rng)
-
-
-@beartype
-def augment_samples(
-    rng: torch.Generator, samples: Float[Tensor, "n 2"], amplitude: float
-) -> Float[Tensor, "n 2"]:
-    """Add Gaussian noise to the samples."""
-    noise = amplitude * torch.randn(samples.shape, generator=rng)
-    return samples + noise
-
-
-@beartype
-def compute_fns(samples: Float[Tensor, "n 2"]) -> Float[Tensor, "n 10"]:
-    """Compute the results of all functions on the pair of samples."""
-    results = []
-    for _, fn in ALL_FNS:
-        results.append(fn(samples[:, 0], samples[:, 1]))
-    return torch.stack(results, dim=1)
-
-
-@beartype
-def make_dataset(samples: Tuple[int, int], noise: float, seed: int = 42) -> Tuple[
-    Tuple[Float[Tensor, "n 2"], Float[Tensor, "n 10"]],
-    Tuple[Float[Tensor, "m 2"], Float[Tensor, "m 10"]],
-]:
-    """Generate a dataset of samples and their corresponding targets."""
-    rng = torch.Generator()
-    rng.manual_seed(seed)
-
-    x_pre_train = generate_samples(rng, samples[0]).float()
-    x_train = augment_samples(rng, x_pre_train, noise).float()
-    x_test = generate_samples(rng, samples[1]).float()
-
-    y_train = compute_fns(x_pre_train)
-    y_test = compute_fns(x_test)
-
-    return (x_train, y_train), (x_test, y_test)
 
 
 @beartype
@@ -91,9 +49,8 @@ def train_model(
     learning_rate: float,
     lr_div: int,
     lr_step: int,
-    test_every: int,
     desc: str = "Training",
-):
+) -> pd.DataFrame:
     (x_train, y_train), (x_test, y_test) = data
 
     x_train, y_train = x_train, y_train
@@ -134,27 +91,20 @@ def train_model(
             epoch_loss += loss.item()
             epoch_acc += accuracy(y_batch, output).item()
 
-            if (batch // batch_size) % test_every == 0:
-                test_loss, test_acc = evaluate(model, x_test, y_test, criterion)
-                test_losses.append(test_loss.item())
-                test_accuracies.append(test_acc.item())
-                pb.set_postfix(
-                    {
-                        "train_loss": epoch_loss / (batch + 1),
-                        "test_loss": test_loss.item(),
-                        "train_acc": epoch_acc / (batch + 1) * 100,
-                        "test_acc": test_acc.item() * 100,
-                    }
-                )
-
             pb.update(batch_size)
 
         if (epoch + 1) % lr_step == 0:
             for param_group in optimiser.param_groups:
                 param_group["lr"] /= lr_div
 
+        # Evaluate the model
         train_losses.append(epoch_loss / (len(x_train) / batch_size))
         train_accuracies.append(epoch_acc / (len(x_train) / batch_size))
+
+        test_loss, test_acc = evaluate(model, x_test, y_test, criterion)
+        test_losses.append(test_loss.item())
+        test_accuracies.append(test_acc.item())
+
         pb.set_postfix(
             {
                 "train_loss": train_losses[-1],
@@ -164,10 +114,20 @@ def train_model(
             }
         )
 
-    return train_losses, test_losses, train_accuracies, test_accuracies
+    df = pd.DataFrame(
+        {
+            "epoch": range(1, epoch + 2),
+            "train_loss": train_losses,
+            "test_loss": test_losses,
+            "train_acc": train_accuracies,
+            "test_acc": test_accuracies,
+        },
+    )
+
+    return df
 
 
-class Arguments(argparse.Namespace):
+class ExpOneArgs(argparse.Namespace):
     id: str
     arch: str
     layers: int
@@ -177,14 +137,57 @@ class Arguments(argparse.Namespace):
     lr: float
     lr_div: int
     lr_step: int
-    test_interval: int
-    data_seed: int
-    train_seed: int
-    train_size: int
-    test_size: int
-    train_noise: float
+    seed: int
     function: int
     dropout: float
+
+
+def run(args: ExpOneArgs):
+    torch.manual_seed(args.seed)
+
+    # Extract the function name
+    FN_NAMES = [fn[0] for fn in ALL_FNS]
+    fn_name = FN_NAMES[args.function]
+    desc = f"{args.arch}-{args.layers}-{args.hidden} ({fn_name})"
+
+    # Load the data
+    dataset = torch.load("dataset.pt", weights_only=False)
+    d_train, d_test = dataset["train"], dataset["test"]
+
+    # Extract the data
+    train_data = d_train[0].cuda(), d_train[1][fn_name].cuda()
+    test_data = d_test[0].cuda(), d_test[1][fn_name].cuda()
+
+    # Create the model
+    if args.arch == "FC":
+        model = FullyConnectedNetwork(2, 1, args.layers, args.hidden, args.dropout)
+    else:
+        model = NeuralLogicNetwork(2, 1, args.layers, args.hidden, args.arch == "AN")
+
+    model.cuda()
+
+    # Train the model
+    data = train_data, test_data
+    hp = {
+        "num_epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "lr_div": args.lr_div,
+        "lr_step": args.lr_step,
+    }
+    result = train_model(model, data, **hp, desc=desc)
+
+    # Save the results
+
+    results_dir = f"results/{args.arch}-{args.layers}-{args.hidden}"
+    os.makedirs(results_dir, exist_ok=True)
+
+    results_file = f"{results_dir}/{args.function}-{args.seed}"
+    if args.id:
+        results_file += f"-{args.id}"
+    results_file += ".csv"
+
+    result.to_csv(results_file, index=False)
 
 
 if __name__ == "__main__":
@@ -199,71 +202,10 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--lr_div", type=int, default=10)
     parser.add_argument("--lr_step", type=int, default=20)
-    parser.add_argument("--test_interval", type=int, default=500)
-    parser.add_argument("--data_seed", type=int, default=42)
     parser.add_argument("--train_seed", type=int, default=10)
-    parser.add_argument("--train_size", type=int, default=10_000)
-    parser.add_argument("--test_size", type=int, default=1_000)
-    parser.add_argument("--train_noise", type=float, default=0.0025)
     parser.add_argument("--function", type=int, default=0, choices=range(len(ALL_FNS)))
     parser.add_argument("--dropout", type=float, default=0.2)
 
-    args = parser.parse_args(namespace=Arguments())
+    args = parser.parse_args(namespace=ExpOneArgs())
 
-    # Extract the function name
-    FN_NAMES = [fn[0] for fn in ALL_FNS]
-    fn_name = FN_NAMES[args.function]
-    desc = f"{args.arch}-{args.layers}-{args.hidden} ({fn_name})"
-
-    # Generate the dataset
-    d_train, d_test = make_dataset(
-        (args.train_size, args.test_size), args.train_noise, args.data_seed
-    )
-
-    # Extract the data
-    train_data = d_train[0], d_train[1][:, args.function].unsqueeze(-1)
-    test_data = d_test[0], d_test[1][:, args.function].unsqueeze(-1)
-
-    # Create the model
-    if args.arch == "FC":
-        model = FullyConnectedNetwork(2, 1, args.layers, args.hidden, args.dropout)
-    else:
-        model = NeuralLogicNetwork(2, 1, args.layers, args.hidden, args.arch == "AN")
-
-    # Set the random seed
-    torch.manual_seed(args.train_seed)
-
-    # Train the model
-    data = train_data, test_data
-    train_losses, test_losses, train_accuracies, test_accuracies = train_model(
-        model,
-        data,
-        args.epochs,
-        args.batch_size,
-        args.lr,
-        args.lr_div,
-        args.lr_step,
-        args.test_interval,
-        desc,
-    )
-
-    # Save the results
-    results = {
-        "fn_name": fn_name,
-        "train_losses": train_losses,
-        "test_losses": test_losses,
-        "train_accuracies": train_accuracies,
-        "test_accuracies": test_accuracies,
-    }
-
-    results_dir = f"results/{args.arch}-{args.layers}-{args.hidden}"
-    os.makedirs(results_dir, exist_ok=True)
-
-    results_file = f"{results_dir}/{args.function}-{args.data_seed}-{args.train_seed}"
-    if args.id:
-        results_file += f"-{args.id}"
-    results_file += ".pt"
-
-    torch.save(results, results_file)
-
-    print(f"Results saved to {results_file}")
+    run(args)
