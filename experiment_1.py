@@ -202,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--lr_div", type=int, default=10)
     parser.add_argument("--lr_step", type=int, default=20)
-    parser.add_argument("--train_seed", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--function", type=int, default=0, choices=range(len(ALL_FNS)))
     parser.add_argument("--dropout", type=float, default=0.2)
 
