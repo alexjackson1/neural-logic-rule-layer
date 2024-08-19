@@ -4,7 +4,7 @@
 #SBATCH --array=0-2399
 #SBATCH --time=01:00:00
 #SBATCH --mem=16G
-#SBATCH --gres=gpu,nmes_gpu
+#SBATCH --gres=gpu
 #SBATCH --partition=gpu,nmes_gpu
 
 
