@@ -17,6 +17,7 @@ class NeuralLogicNetwork(nn.Module):
         layers: int,
         hidden_dim: int,
         nnf: bool = False,
+        device: str = "cpu",
     ):
         super(NeuralLogicNetwork, self).__init__()
         self.num_layers = layers
@@ -24,15 +25,23 @@ class NeuralLogicNetwork(nn.Module):
         self.nnf = nnf
 
         if layers == 1:
-            self.nlrl1 = NeuralLogicRuleLayer(input_size, out_size, nnf=nnf)
+            self.nlrl1 = NeuralLogicRuleLayer(
+                input_size, out_size, nnf=nnf, device=device
+            )
             self.proj = nn.Identity()
         else:
-            self.nlrl1 = NeuralLogicRuleLayer(input_size, hidden_dim, nnf=nnf)
-            self.proj = NeuralLogicRuleLayer(hidden_dim, out_size, nnf=nnf)
+            self.nlrl1 = NeuralLogicRuleLayer(
+                input_size, hidden_dim, nnf=nnf, device=device
+            )
+            self.proj = NeuralLogicRuleLayer(
+                hidden_dim, out_size, nnf=nnf, device=device
+            )
 
         for i in range(2, layers):
             setattr(
-                self, f"nlrl{i}", NeuralLogicRuleLayer(hidden_dim, hidden_dim, nnf=nnf)
+                self,
+                f"nlrl{i}",
+                NeuralLogicRuleLayer(hidden_dim, hidden_dim, nnf=nnf, device=device),
             )
 
     def forward(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:

@@ -35,41 +35,44 @@ class NeuralLogicRuleLayer(nn.Module):
     Information Sciences v596 pp.185-201. https://doi.org/10.1016/j.ins.2022.03.021
     """
 
-    def __init__(self, input_size: int, output_size: int, nnf: bool = False):
+    def __init__(
+        self, input_size: int, output_size: int, nnf: bool = False, device: str = "cpu"
+    ):
         super(NeuralLogicRuleLayer, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
         self.nnf = nnf
 
-        self.GN = nn.Parameter(torch.empty(input_size))
+        self.GN = nn.Parameter(torch.empty(input_size, output_size, device=device))
         nn.init.uniform_(self.GN, -0.5, 0.5)
 
-        self.GR = nn.Parameter(torch.empty(input_size, output_size))
+        self.GR = nn.Parameter(torch.empty(input_size, output_size, device=device))
         nn.init.uniform_(self.GR, -0.5, 0.5)
 
         if not nnf:
-            self.GS = nn.Parameter(torch.empty(output_size))
+            self.GS = nn.Parameter(torch.empty(output_size, device=device))
             nn.init.uniform_(self.GS, -0.5, 0.5)
 
-    def negation(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... in"]:
-        GN = torch.sigmoid(self.GN)
-        return (1 - GN) * x + GN * (1 - x)
+    def negation(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out in"]:
+        GN = torch.sigmoid(self.GN).unsqueeze(0)
+        x = x.unsqueeze(-1)
+        x = (1 - GN) * x + GN * (1 - x)
+        return x
 
-    def conjunction(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:
-        GR = torch.sigmoid(self.GR)
+    def conjunction(self, x: Float[Tensor, "... out in"]) -> Float[Tensor, "... out"]:
+        GR = torch.sigmoid(self.GR).unsqueeze(0)
         x = torch.log(x.clamp(min=1e-10))
-        return torch.exp(torch.matmul(x, GR))
+        x = torch.exp(GR.mT @ x).sum(dim=-1)
+        return x
 
-    def disjunction(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:
-        GR = torch.sigmoid(self.GR)
-        x = torch.log(x.clamp(min=1e-10))
-        return 1 - torch.exp(torch.matmul(x, GR))
+    def disjunction(self, x: Float[Tensor, "... out in"]) -> Float[Tensor, "... out"]:
+        return 1 - self.conjunction(1 - x)
 
     def selection(
         self, x_1: Float[Tensor, "... out"], x_2: Float[Tensor, "... out"]
     ) -> Float[Tensor, "... out"]:
         assert not self.nnf, "Selection is not defined for NNF"
-        GS = torch.sigmoid(self.GS)
+        GS = torch.sigmoid(self.GS).unsqueeze(0)
         return (1 - GS) * x_1 + GS * x_2
 
     def forward(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out"]:

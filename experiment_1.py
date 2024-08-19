@@ -57,7 +57,7 @@ def train_model(
     x_test, y_test = x_test, y_test
 
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.BCELoss()
+    criterion = torch.nn.MSELoss()
 
     train_losses, test_losses = [], []
     train_accuracies, test_accuracies = [], []
