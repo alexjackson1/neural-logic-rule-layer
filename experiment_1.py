@@ -158,8 +158,8 @@ def run(args: ExpOneArgs):
     d_train, d_test = dataset["train"], dataset["test"]
 
     # Extract the data
-    train_data = d_train[0].cuda(), d_train[1][fn_name].cuda()
-    test_data = d_test[0].cuda(), d_test[1][fn_name].cuda()
+    train_data = d_train[0].to(args.device), d_train[1][fn_name].to(args.device)
+    test_data = d_test[0].to(args.device), d_test[1][fn_name].to(args.device)
 
     # Create the model
     if args.arch == "FC":
@@ -167,7 +167,7 @@ def run(args: ExpOneArgs):
     else:
         model = NeuralLogicNetwork(2, 1, args.layers, args.hidden, args.arch == "AN")
 
-    model.cuda()
+    model.to(args.device)
 
     # Train the model
     data = train_data, test_data

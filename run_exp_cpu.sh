@@ -8,7 +8,6 @@
 #SBATCH --partition=cpu,nmes_cpu
 
 
-module load cuda
 module load python
 
 source env/bin/activate
