@@ -103,7 +103,9 @@ def to_params(task_id: int) -> ParsedParams:
     return ParsedParams(run_idx, fn_idx, architecture, num_layers, num_hidden_units)
 
 
-def to_arguments(seed: int, params: ParsedParams) -> ExpOneArgs:
+def to_arguments(
+    seed: int, params: ParsedParams, save_model: bool, out_dir: str, device: str
+) -> ExpOneArgs:
     return ExpOneArgs(
         id=f"{params.run_idx}",
         arch=params.architecture,
@@ -117,14 +119,32 @@ def to_arguments(seed: int, params: ParsedParams) -> ExpOneArgs:
         seed=seed,
         function=params.fn_idx,
         dropout=FC_DROPOUT_RATE,
+        device=device,
+        save_model=save_model,
+        out_dir=out_dir,
     )
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save_model", action="store_true")
+    parser.add_argument("--out_dir", type=str, default="results")
+    parser.add_argument("--device", type=str, default="cuda")
+
+    cli_args = parser.parse_args()
+
     job_id = slurm_job_id()
     task_id = slurm_task_id()
 
     params = to_params(task_id)
-    args = to_arguments(job_id, params)
+    args = to_arguments(
+        job_id,
+        params,
+        save_model=cli_args.save_model,
+        out_dir=cli_args.out_dir,
+        device=cli_args.device,
+    )
 
     run(args)

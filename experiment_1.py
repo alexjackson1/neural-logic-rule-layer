@@ -140,6 +140,9 @@ class ExpOneArgs(argparse.Namespace):
     seed: int
     function: int
     dropout: float
+    device: str
+    save_model: bool
+    out_dir: str
 
 
 def run(args: ExpOneArgs):
@@ -179,7 +182,7 @@ def run(args: ExpOneArgs):
 
     # Save the results
 
-    results_dir = f"results/{args.arch}-{args.layers}-{args.hidden}"
+    results_dir = f"{args.out_dir}/{args.arch}-{args.layers}-{args.hidden}"
     os.makedirs(results_dir, exist_ok=True)
 
     results_file = f"{results_dir}/{args.function}-{args.seed}"
@@ -188,6 +191,10 @@ def run(args: ExpOneArgs):
     results_file += ".csv"
 
     result.to_csv(results_file, index=False)
+
+    if args.save_model:
+        model_file = results_file.replace(".csv", ".pt")
+        torch.save(model.state_dict(), model_file)
 
 
 if __name__ == "__main__":
@@ -205,6 +212,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--function", type=int, default=0, choices=range(len(ALL_FNS)))
     parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--save_model", action="store_true")
+    parser.add_argument("--out_dir", type=str, default="results")
 
     args = parser.parse_args(namespace=ExpOneArgs())
 
