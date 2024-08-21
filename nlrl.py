@@ -61,12 +61,12 @@ class NeuralLogicRuleLayer(nn.Module):
 
     def conjunction(self, x: Float[Tensor, "... in out"]) -> Float[Tensor, "... out"]:
         GR = torch.sigmoid(self.GR)
-        # x = torch.log(x.clamp(min=1e-10))
-        x = torch.log(x + 1e-10)
+        x = torch.log(x.clamp(min=1e-10))
+        # x = torch.log(x + 1e-10)
         x = torch.exp((GR * x).sum(-2))
         return x
 
-    def disjunction(self, x: Float[Tensor, "... out in"]) -> Float[Tensor, "... out"]:
+    def disjunction(self, x: Float[Tensor, "... in out"]) -> Float[Tensor, "... out"]:
         return 1 - self.conjunction(1 - x)
 
     def selection(
