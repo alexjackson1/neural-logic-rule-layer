@@ -53,16 +53,17 @@ class NeuralLogicRuleLayer(nn.Module):
             self.GS = nn.Parameter(torch.empty(output_size, device=device))
             nn.init.uniform_(self.GS, -0.5, 0.5)
 
-    def negation(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... out in"]:
+    def negation(self, x: Float[Tensor, "... in"]) -> Float[Tensor, "... in out"]:
         GN = torch.sigmoid(self.GN).unsqueeze(0)
         x = x.unsqueeze(-1)
         x = (1 - GN) * x + GN * (1 - x)
         return x
 
-    def conjunction(self, x: Float[Tensor, "... out in"]) -> Float[Tensor, "... out"]:
-        GR = torch.sigmoid(self.GR).unsqueeze(0)
-        x = torch.log(x.clamp(min=1e-10))
-        x = torch.exp(GR.sum(-1) @ x)
+    def conjunction(self, x: Float[Tensor, "... in out"]) -> Float[Tensor, "... out"]:
+        GR = torch.sigmoid(self.GR)
+        # x = torch.log(x.clamp(min=1e-10))
+        x = torch.log(x + 1e-10)
+        x = torch.exp((GR * x).sum(-2))
         return x
 
     def disjunction(self, x: Float[Tensor, "... out in"]) -> Float[Tensor, "... out"]:
@@ -96,8 +97,9 @@ class NeuralLogicRuleLayer(nn.Module):
 
 
 if __name__ == "__main__":
+    batch_size = 3
     input_size = 10
     output_size = 5
-    x = torch.rand(3, input_size)
+    x = torch.rand(batch_size, input_size)
     layer = NeuralLogicRuleLayer(input_size, output_size, nnf=False)
     print(layer(x))

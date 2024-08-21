@@ -14,5 +14,5 @@ source env/bin/activate
 
 python /scratch/prj/formalpaca/nlrl/runner.py \
   --save_model \
-  --out_dir /scratch/prj/formalpaca/nlrl/results_3 \
+  --out_dir /scratch/prj/formalpaca/nlrl/new_conj \
   --device cpu
